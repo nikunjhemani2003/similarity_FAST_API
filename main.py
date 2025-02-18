@@ -384,7 +384,45 @@ async def validate_invoice(request: InvoiceValidationRequest):
         error_list = []
 
         # Extract invoice date from the request
+
+        supplier_details = request.extracted_data.get("supplier_details", {})
         bill_to_details = request.extracted_data.get("bill_to_details", {})
+        ship_to_details = request.extracted_data.get("ship_to_details", {})
+        transaction_details = request.extracted_data.get("transaction_details", {})
+        other_details = request.extracted_data.get("other_details", {})
+        sales_of_product_services = request.extracted_data.get("sales_of_product_services", [])  # Note: Default to empty list
+        gst_summary = request.extracted_data.get("gst_summary", [])
+        additional_information = request.extracted_data.get("additional_information", {})
+
+        #Validation for supplier_details
+        supplier_name = supplier_details.get("supplier_name")
+        supplier_address = supplier_details.get("supplier_address")
+        supplier_gst_no = supplier_details.get("supplier_gst_no")
+        supplier_state_name = supplier_details.get("supplier_state_name")
+        supplier_state_code = supplier_details.get("supplier_state_code")
+        supplier_pan_no = supplier_details.get("supplier_pan_no")
+
+        supplier_gst_validation_task = validate_gst_number(supplier_name,supplier_address,supplier_gst_no,supplier_state_name,supplier_state_code,supplier_pan_no,"supplier")
+        supplier_gst_validation_result = await supplier_gst_validation_task
+        if (error := supplier_gst_validation_result):
+            error_list.append(error)    
+
+        supplier_name_validation_task = validate_name_in_db("users",supplier_name,supplier_gst_no)
+        supplier_name_validation_result = await supplier_name_validation_task
+        if (error := supplier_name_validation_result):
+            error_list.append(error)
+
+        supplier_address_validation_task = validate_address_in_db(supplier_address,supplier_gst_no)
+        supplier_address_validation_result = await supplier_address_validation_task
+        if (error := supplier_address_validation_result):
+            error_list.append(error)
+            
+            
+        if(error := validate_pan_number(supplier_pan_no,"supplier")):
+            error_list.append(error)
+
+        #Validation for bill_to_details
+
         bill_to_invoice_date = bill_to_details.get("invoice_date")
         bill_to_invoice_no = bill_to_details.get("invoice_no")
         bill_to_gst_no = bill_to_details.get("buyer_gst_no")
@@ -395,7 +433,6 @@ async def validate_invoice(request: InvoiceValidationRequest):
         bill_to_pan_no = bill_to_details.get("buyer_pan_no")
 
         # Extract product details from the request
-        sales_of_product_services = request.extracted_data.get("sales_of_product_services", [])  # Note: Default to empty list
 
 
 
@@ -406,7 +443,7 @@ async def validate_invoice(request: InvoiceValidationRequest):
             error_list.append(error)
         
 
-        gst_validation_task = validate_gst_number(bill_to_name,bill_to_address,bill_to_gst_no,bill_to_state_name,bill_to_state_code,bill_to_pan_no,"bill_to")  
+        gst_validation_task = validate_gst_number(bill_to_name,bill_to_address,bill_to_gst_no,bill_to_state_name,bill_to_state_code,bill_to_pan_no,"Buyer")  
         gst_validation_result = await gst_validation_task
         if (error := gst_validation_result):
             error_list.append(error)
@@ -422,9 +459,38 @@ async def validate_invoice(request: InvoiceValidationRequest):
         if (error := address_validation_result):
             error_list.append(error)
 
-        if(error := validate_pan_number(bill_to_pan_no)):
+        if(error := validate_pan_number(bill_to_pan_no,"Buyer")):
             error_list.append(error)
 
+
+
+        # validation for Party_name
+        party_name = ship_to_details.get("party_name")
+        party_address = ship_to_details.get("party_address")
+        party_gst_no = ship_to_details.get("party_gst_no")
+        party_state_name = ship_to_details.get("party_state_name")
+        party_state_code = ship_to_details.get("party_state_code")
+        party_pan_no = ship_to_details.get("party_pan_no")
+
+        party_gst_validation_task = validate_gst_number(party_name,party_address,party_gst_no,party_state_name,party_state_code,party_pan_no,"Party")
+        party_gst_validation_result = await party_gst_validation_task
+        if (error := party_gst_validation_result):
+            error_list.append(error)    
+
+        party_name_validation_task = validate_name_in_db("users",party_name,party_gst_no)
+        party_name_validation_result = await party_name_validation_task
+        if (error := party_name_validation_result):
+            error_list.append(error)
+
+        party_address_validation_task = validate_address_in_db(party_address,party_gst_no)
+        party_address_validation_result = await party_address_validation_task
+        if (error := party_address_validation_result):
+            error_list.append(error)
+
+        if(error := validate_pan_number(party_pan_no,"Party")):
+            error_list.append(error)
+        
+        
 
         # sales_of_product_services validation
         # item_name validation

@@ -20,12 +20,12 @@ def validate_invoice_date(invoice_date_str: str) -> dict:
         }
 
     # Convert date string (DD/MM/YYYY) to datetime object
-    try:
-        invoice_date = datetime.strptime(invoice_date_str, "%d/%m/%Y")
+    try:    
+        invoice_date = datetime.strptime(invoice_date_str, "%d/%m/%y")
     except ValueError:
         return {
             "invoice_date": invoice_date_str,
-            "error": "Invalid date format. Expected DD/MM/YYYY"
+            "error": "Invalid date format. Expected DD/MM/YY"
         }
 
     # Get current date (without time)
@@ -109,18 +109,20 @@ async def validate_gst_number(name: str, address: str, gst_no: str,state_name:st
         if not re.match(GST_REGEX, entity_gst_no.strip()):
             return {
                 "gst_number": entity_gst_no,
-                "error": "Invalid GST number format. Expected format: 12ABCDE1234F1Z5"
+                "error": f"{entity} Invalid GST number format. Expected format: 12ABCDE1234F1Z5"
             }
 
         # Validate required fields when GST is provided
         missing_fields = []
         entity_state_name = state_name
         entity_state_code = state_code
+        # print("Hello")
+        # print(entity_state_name,entity_state_code)
 
         if not entity_state_name or entity_state_name.strip() == "" or entity_state_name == "null" or entity_state_code == 0 or entity_state_code == "0":
-            missing_fields.append("State name is required when GST number is provided")
-        if entity_state_code is None or entity_state_code == "0":
-            missing_fields.append("State code is required when GST number is provided")
+            missing_fields.append(f"{entity} state name is required when GST number is provided")
+        if entity_state_code is None or entity_state_code == "0" or entity_state_code == 0:
+            missing_fields.append(f"{entity} state code is required when GST number is provided")
 
             
 
@@ -136,7 +138,7 @@ async def validate_gst_number(name: str, address: str, gst_no: str,state_name:st
             except httpx.HTTPError as e:
                 return {
                     "gst_number": entity_gst_no,
-                    "error": f"Error checking GST number: {str(e)}"
+                    "error": f"{entity} Error checking GST number: {str(e)}"
                 }
 
         gst_data = response.json()
@@ -145,7 +147,7 @@ async def validate_gst_number(name: str, address: str, gst_no: str,state_name:st
         if gst_data.get("status") == "not_found":
             return {
                 "gst_number": entity_gst_no,
-                "error": "GST number not found in database"
+                "error": f"{entity} GST number not found in database"
             }
 
         # Validate database record matches
@@ -155,15 +157,15 @@ async def validate_gst_number(name: str, address: str, gst_no: str,state_name:st
         # Compare fields (case-insensitive)
         print(name,address,entity_state_name,entity_state_code)
         if db_entry.get("name", "").strip().lower() != name.strip().lower():
-            errors.append("Name does not match database record")
+            errors.append(f"{entity} Name does not match database record")
         if db_entry.get("address", "").strip().lower() != address.strip().lower():
-            errors.append("Address does not match database record")
+            errors.append(f"{entity} Address does not match database record")
         if db_entry.get("state_name", "").strip().lower() != entity_state_name.strip().lower():
-            errors.append("State name does not match database record")
+            errors.append(f"{entity} State name does not match database record")
         if db_entry.get("state_code") != entity_state_code:
-            errors.append("State code does not match database record")
+            errors.append(f"{entity} State code does not match database record")
         if pan_no and db_entry.get("pan_number", "").strip().lower() != pan_no.strip().lower():
-            errors.append("PAN number does not match database record")
+            errors.append(f"{entity} PAN number does not match database record")
 
 
         if errors and missing_fields:
@@ -179,7 +181,7 @@ async def validate_gst_number(name: str, address: str, gst_no: str,state_name:st
     except Exception as e:
         return {
             "gst_number": entity_gst_no if 'entity_gst_no' in locals() else None,
-            "error": f"Unexpected error during GST validation: {str(e)}"
+            "error": f"{entity} Unexpected error during GST validation: {str(e)}"
         }
 
 
@@ -285,7 +287,7 @@ async def validate_address_in_db(input_address: str, gst_no: str) -> dict | None
 # import re
 PAN_REGEX = r'^[A-Z]{5}[0-9]{4}[A-Z]$'
 
-def validate_pan_number(pan_no: str) -> dict | None:
+def validate_pan_number(pan_no: str,entity:str) -> dict | None:
     """
     Validates the format of a PAN number.
 
@@ -301,7 +303,7 @@ def validate_pan_number(pan_no: str) -> dict | None:
 
     # ✅ Validate PAN format using regex
     if not re.match(PAN_REGEX, pan_no.strip()):
-        return {"pan_number": pan_no, "error": "Invalid PAN number format. Expected format: ABCDE1234F"}
+        return {"pan_number": pan_no, "error": f"{entity} Invalid PAN number format. Expected format: ABCDE1234F"}
 
     # ✅ If PAN format is valid, return None (no error)
     return None

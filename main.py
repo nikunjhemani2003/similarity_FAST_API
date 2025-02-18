@@ -1,14 +1,21 @@
 from fastapi import FastAPI, HTTPException, Depends, Request,UploadFile,File
 from pydantic import BaseModel, validator, Field
 from database import get_db_connection
-from datetime import datetime
+from datetime import datetime, timedelta
 import pandas as pd
 import magic 
 from fastapi.responses import FileResponse
 import io
 import psycopg2
+import re
+import validators   
+from validators import *  # This imports all functions from validation_utils
+import asyncio  # Add this import at the top
+
+
 
 app = FastAPI()
+
 
 class FieldRecommendRequest(BaseModel):
     name: str = Field(..., min_length=1, max_length=100)
@@ -26,11 +33,15 @@ class GSTCheckRequest(BaseModel):
 
 
 
-class NameMappingRequest(BaseModel):
+class UserNameMappingRequest(BaseModel):
     supplier_name: str
     buyer_name: str
     party_name: str
     invoice_data: dict  # Invoice response from extracted data
+
+
+class InvoiceValidationRequest(BaseModel):
+    extracted_data: dict
 
 
 @app.post("/field-recommend")
@@ -136,8 +147,8 @@ async def gst_check(request: GSTCheckRequest):
     
 
 
-@app.post("/name-mapping")
-async def name_mapping(request: NameMappingRequest):
+@app.post("/user-mapping")
+async def name_mapping(request: UserNameMappingRequest):
     """
     API endpoint to compare names with invoice response.
     If different, store them in the user_name_mapping table with the mapped name's user ID.
@@ -362,3 +373,78 @@ async def upload_user_aliases(file: UploadFile = File(...)):
         traceback.print_exc()  # Print full error traceback
         print(f"❌ ERROR: {str(e)}")  # Debug Print
         raise HTTPException(status_code=500, detail=f"Internal Server Error: {str(e)}")
+
+
+@app.post("/validate-invoice")
+async def validate_invoice(request: InvoiceValidationRequest):
+    """
+    API endpoint to validate AI generated invoice data
+    """
+    try:
+        error_list = []
+
+        # Extract invoice date from the request
+        bill_to_details = request.extracted_data.get("bill_to_details", {})
+        bill_to_invoice_date = bill_to_details.get("invoice_date")
+        bill_to_invoice_no = bill_to_details.get("invoice_no")
+        bill_to_gst_no = bill_to_details.get("buyer_gst_no")
+        bill_to_state_name = bill_to_details.get("buyer_state_name")
+        bill_to_state_code = bill_to_details.get("buyer_state_code")
+        bill_to_name = bill_to_details.get("buyer_name")
+        bill_to_address = bill_to_details.get("buyer_address")
+        bill_to_pan_no = bill_to_details.get("buyer_pan_no")
+
+        # Extract product details from the request
+        sales_of_product_services = request.extracted_data.get("sales_of_product_services", [])  # Note: Default to empty list
+
+
+
+        # For bill_to_details
+        if (error := validate_invoice_date(bill_to_invoice_date)):
+            error_list.append(error)
+        if (error := validate_invoice_number(bill_to_invoice_no)):
+            error_list.append(error)
+        
+
+        gst_validation_task = validate_gst_number(bill_to_name,bill_to_address,bill_to_gst_no,bill_to_state_name,bill_to_state_code,bill_to_pan_no,"bill_to")  
+        gst_validation_result = await gst_validation_task
+        if (error := gst_validation_result):
+            error_list.append(error)
+
+
+        name_validation_task = validate_name_in_db("users",bill_to_name,bill_to_gst_no)
+        name_validation_result = await name_validation_task
+        if (error := name_validation_result):
+            error_list.append(error)
+
+        address_validation_task = validate_address_in_db(bill_to_address,bill_to_gst_no)
+        address_validation_result = await address_validation_task
+        if (error := address_validation_result):
+            error_list.append(error)
+
+        if(error := validate_pan_number(bill_to_pan_no)):
+            error_list.append(error)
+
+
+        # sales_of_product_services validation
+        # item_name validation
+        item_name_validation_task = [
+            validate_name_in_db("product", data.get("product_service_description"), None) 
+            for data in sales_of_product_services
+        ]
+        
+        item_name_validation_result = await asyncio.gather(*item_name_validation_task)
+        
+        for error in item_name_validation_result:
+            if error:
+                error_list.append(error)
+
+        # If no errors found, return success message
+        if not error_list:
+            return {"status": "success", "message": "All validations passed"}
+            
+        return {"status": "error", "errors": error_list}
+
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=str(e))
+

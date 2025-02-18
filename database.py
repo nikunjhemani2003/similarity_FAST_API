@@ -12,4 +12,8 @@ DB_CONFIG = {
 
 def get_db_connection():
     """Create and return a database connection"""
-    return psycopg2.connect(**DB_CONFIG, cursor_factory=RealDictCursor) 
+    try:
+        return psycopg2.connect(**DB_CONFIG, cursor_factory=RealDictCursor)
+    except Exception as e:
+        print(f"Database connection error: {e}")
+        raise 

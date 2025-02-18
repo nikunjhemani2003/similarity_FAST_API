@@ -1,0 +1,541 @@
+# from fastapi import FastAPI, HTTPException, Depends
+# from pydantic import BaseModel, Field, ValidationError,model_validator,validator
+# import requests
+# from datetime import datetime
+# import re
+# from fastapi.responses import JSONResponse
+# from fastapi.exceptions import RequestValidationError
+# from starlette.requests import Request
+
+# app = FastAPI()
+
+# # Regex patterns for validation
+# PAN_REGEX = r'^[A-Z]{5}[0-9]{4}[A-Z]$'  # Format: ABCDE1234F
+# GST_REGEX = r'^[0-9]{2}[A-Z]{5}[0-9]{4}[A-Z][0-9]{1}[Z][0-9A-Z]{1}$'  # Format: 12ABCDE1234F1Z5
+
+# class ValidationResult:
+#     def __init__(self):
+#         self.errors = {
+#             "mandatory_validation": [],
+#             "format_validation": [],
+#             "gst_validation": [],
+#             "invoice_validation": [],
+#             "product_validation": [],
+#             "other_validation": []
+#         }
+    
+#     def add_error(self, category: str, error: str):
+#         if category in self.errors:
+#             self.errors[category].append(error)
+    
+#     def add_mandatory_error(self, field_name: str):
+#         self.errors["mandatory_validation"].append(f"{field_name} is required")
+    
+#     def has_errors(self):
+#         return any(len(errors) > 0 for errors in self.errors.values())
+    
+#     def get_errors(self):
+#         return {k: v for k, v in self.errors.items() if v}
+
+# class SupplierDetails(BaseModel):
+#     supplier_name: str 
+#     supplier_address: str
+#     supplier_state_name: str | None
+#     supplier_state_code: int | None
+#     supplier_gst_no: str | None = Field(None, pattern=GST_REGEX)
+#     supplier_pan_no: str | None = Field(None, pattern=PAN_REGEX)
+#     supplier_dispatch_location: str | None
+
+#     @model_validator(mode="before")
+#     @classmethod
+#     def validate_fields(cls, values):
+#         errors = []
+        
+#         # Validate mandatory fields
+#         mandatory_fields = [
+#             "supplier_name",
+#             "supplier_address"
+#         ]
+        
+#         for field in mandatory_fields:
+#             if not values.get(field):
+#                 errors.append(f"{field} is required")
+
+#         # Validate GST and state fields
+#         gst_no = values.get("supplier_gst_no")
+#         state_name = values.get("supplier_state_name")
+#         state_code = values.get("supplier_state_code")
+
+#         if gst_no:
+#             if not state_name:
+#                 errors.append("supplier_state_name is required when supplier_gst_no is provided")
+#             if state_code is None or state_code == 0:
+#                 errors.append("supplier_state_code is required when supplier_gst_no is provided")
+
+#         if errors:
+#             raise ValueError(errors)
+            
+#         return values
+
+# class BillToDetails(BaseModel):
+#     invoice_no: str
+#     invoice_date: str
+#     buyer_name: str
+#     buyer_address: str
+#     buyer_gst_no: str = Field(..., pattern=GST_REGEX)
+#     buyer_state_name: str
+#     buyer_state_code: int
+#     buyer_pan_no: str | None = Field(None, pattern=PAN_REGEX)
+#     buyer_dispatch_location: str | None
+
+#     @model_validator(mode="before")
+#     @classmethod
+#     def validate_fields(cls, values):
+#         errors = []
+        
+#         mandatory_fields = [
+#             "invoice_no",
+#             "invoice_date",
+#             "buyer_name",
+#             "buyer_address",
+#             "buyer_gst_no",
+#             "buyer_state_name",
+#             "buyer_state_code"
+#         ]
+        
+#         for field in mandatory_fields:
+#             if not values.get(field):
+#                 errors.append(f"{field} is required")
+
+#         if errors:
+#             raise ValueError(errors)
+            
+#         return values
+
+# class ShipToDetails(BaseModel):
+#     party_name: str | None
+#     party_address: str | None
+#     party_gst_no: str | None = Field(None, pattern=GST_REGEX)  # Validate GST format
+#     party_pan_no: str | None = Field(None, pattern=PAN_REGEX)  # Validate PAN format
+#     party_state_name: str | None
+#     party_state_code: int | None
+#     party_dispatch_location: str | None
+
+#     @validator('party_gst_no')
+#     def validate_gst(cls, v):
+#         if v and not re.match(GST_REGEX, v):
+#             raise ValueError('Invalid GST number format. Expected format: 12ABCDE1234F1Z5')
+#         return v
+
+#     @validator('party_pan_no')
+#     def validate_pan(cls, v):
+#         if v and not re.match(PAN_REGEX, v):
+#             raise ValueError('Invalid PAN number format. Expected format: ABCDE1234F')
+#         return v
+
+# class TransportDetails(BaseModel):
+#     transport_name: str | None
+#     vehicle_details: str | None
+#     lr_details: str | None
+
+# class SalesProductService(BaseModel):
+#     product_service_description: str
+#     item_name: str | None
+#     hsn: int
+#     sac: int | None
+#     quantity: float
+#     unit: str 
+#     rate: float
+#     amount: float
+#     discount: float | None
+#     gst_rate_igst: float | None
+#     gst_rate_cgst: float | None
+#     gst_rate_sgst: float | None
+#     gst_rate_cess: float | None
+#     gst_amount: float
+#     round_off: float | None
+#     invoice_amount: float | None
+
+# class GSTSummary(BaseModel):
+#     hsn: int
+#     sac: int | None
+#     taxable_value: float
+#     sgst_rate: float
+#     sgst_amount: float
+#     cgst_rate: float
+#     cgst_amount: float
+#     total_tax_amount: float
+
+# class AdditionalInformation(BaseModel):
+#     remarks: str | None
+#     authorized_signatory: str
+
+# class OtherInformation(BaseModel):
+#     po_number: str | None
+#     grn_date: str | None  # Consider using a date type if applicable
+#     grn_no: str | None
+#     payment_terms: str | None
+#     e_way_bill_details: str | None
+#     e_invoice_qr_code: str | None
+#     e_invoice_irn: str | None
+#     tax_applicability_on_rcm: str | None
+
+#     @validator('grn_date')
+#     def validate_grn_date(cls, v):
+#         if v:
+#             try:
+#                 datetime.strptime(v, "%d/%m/%Y")  # Adjust format as needed
+#             except ValueError:
+#                 raise ValueError('Invalid GRN date format. Expected format: DD/MM/YYYY')
+#         return v
+
+# class ExtractedData(BaseModel):
+#     supplier_details: SupplierDetails
+#     bill_to_details: BillToDetails
+#     ship_to_details: ShipToDetails
+#     transport_details: TransportDetails
+#     other_information: OtherInformation
+#     sales_of_product_services: list[SalesProductService]
+#     gst_summary: list[GSTSummary]
+#     additional_information: AdditionalInformation
+
+# class InvoiceValidationRequest(BaseModel):
+#     extracted_data: ExtractedData
+
+# # External API endpoints for data retrieval
+# FIELD_RECOMMEND_API = "http://localhost:8000/field-recommend"
+# GST_CHECK_API = "http://localhost:8000/gst-check"
+# USER_MAPPING_API = "http://localhost:8000/user-mapping"
+
+# def validate_invoice(request: InvoiceValidationRequest):
+#     validation_result = ValidationResult()
+    
+#     try:
+#         supplier = request.extracted_data.supplier_details
+#         buyer = request.extracted_data.bill_to_details
+#         ship_to_details = request.extracted_data.ship_to_details    
+#         transport_details = request.extracted_data.transport_details
+#         other_info = request.extracted_data.other_information
+#         sales_product_services = request.extracted_data.sales_of_product_services
+#         gst_summary = request.extracted_data.gst_summary
+#         additional_info = request.extracted_data.additional_information
+
+        
+#         # Check if sales_of_product_services is empty
+#         if not sales_product_services:
+#             validation_result.add_mandatory_error("sales_of_product_services")
+        
+#         # Run all validations
+#         validate_supplier_gst(supplier, validation_result)
+#         validate_buyer_gst(buyer, validation_result)
+#         validate_invoice_date(buyer, validation_result)
+#         validate_cgst_sgst_vs_igst(supplier, buyer, sales_product_services, validation_result)
+#         validate_authorized_signatory(additional_info, validation_result)
+#         validate_other_information(other_info, validation_result)
+#         validate_grn_date(other_info, validation_result)
+    
+#     except ValidationError as e:
+#         for error in e.errors():
+#             field_location = " -> ".join(str(loc) for loc in error["loc"])
+#             if isinstance(error["msg"], list):  # Handle multiple errors from model validators
+#                 for msg in error["msg"]:
+#                     if "is required" in msg.lower():
+#                         validation_result.add_mandatory_error(msg)
+#                     else:
+#                         validation_result.add_error("format_validation", f"{field_location}: {msg}")
+#             else:
+#                 if "field required" in error["msg"].lower():
+#                     validation_result.add_mandatory_error(field_location)
+#                 else:
+#                     validation_result.add_error("format_validation", f"{field_location}: {error['msg']}")
+    
+#     except Exception as e:
+#         validation_result.add_error("format_validation", f"Error processing request: {str(e)}")
+    
+#     if validation_result.has_errors():
+#         return JSONResponse(
+#             status_code=422,
+#             content={"validation_errors": validation_result.get_errors()}
+#         )
+    
+#     return {"message": "Invoice validation passed"}
+
+# @app.exception_handler(RequestValidationError)
+# async def validation_exception_handler(request: Request, exc: RequestValidationError):
+#     validation_result = ValidationResult()
+    
+#     for error in exc.errors():
+#         field_location = " -> ".join(str(loc) for loc in error["loc"][1:])
+#         if isinstance(error["msg"], list):  # Handle multiple errors from model validators
+#             for msg in error["msg"]:
+#                 if "is required" in msg.lower():
+#                     validation_result.add_mandatory_error(msg)
+#                 else:
+#                     validation_result.add_error("format_validation", f"{field_location}: {msg}")
+#         else:
+#             error_msg = f"{field_location}: {error['msg']}"
+#             validation_result.add_error("format_validation", error_msg)
+    
+#     try:
+#         request_body = await request.json()
+#         extracted_data = request_body.get("extracted_data", {})
+        
+#         if extracted_data:
+#             supplier_data = extracted_data.get("supplier_details", {})
+#             if supplier_data:
+#                 try:
+#                     supplier_model = SupplierDetails(**supplier_data)
+#                     validate_supplier_gst(supplier_model, validation_result)
+#                 except ValidationError:
+#                     pass  # Format errors already captured
+    
+#     except Exception as e:
+#         validation_result.add_error("format_validation", f"Error processing request: {str(e)}")
+    
+#     return JSONResponse(
+#         status_code=422,
+#         content={"validation_errors": validation_result.get_errors()}
+#     )
+
+# def validate_supplier_gst(supplier: SupplierDetails, validation_result: ValidationResult):
+#     if supplier.supplier_gst_no and not re.match(GST_REGEX, supplier.supplier_gst_no):
+#         validation_result.add_error("gst_validation", "Invalid supplier GST number format")
+
+# def validate_buyer_gst(buyer: BillToDetails, validation_result: ValidationResult):
+#     if not re.match(GST_REGEX, buyer.buyer_gst_no):
+#         validation_result.add_error("gst_validation", "Invalid buyer GST number format")
+
+# def validate_invoice_date(buyer: BillToDetails, validation_result: ValidationResult):
+#     try:
+#         datetime.strptime(buyer.invoice_date, "%d/%m/%Y")
+#     except ValueError:
+#         validation_result.add_error("invoice_validation", "Invalid invoice date format. Expected: DD/MM/YYYY")
+
+# def validate_cgst_sgst_vs_igst(supplier: SupplierDetails, buyer: BillToDetails, 
+#                               products: list[SalesProductService], validation_result: ValidationResult):
+#     for product in products:
+#         if product.gst_rate_igst and (product.gst_rate_cgst or product.gst_rate_sgst):
+#             validation_result.add_error("gst_validation", 
+#                 "Product cannot have both IGST and CGST/SGST rates")
+
+# def validate_authorized_signatory(info: AdditionalInformation, validation_result: ValidationResult):
+#     if not info.authorized_signatory:
+#         validation_result.add_mandatory_error("authorized_signatory")
+
+# def validate_other_information(info: OtherInformation, validation_result: ValidationResult):
+#     pass  # Add specific validations if needed
+
+# def validate_grn_date(info: OtherInformation, validation_result: ValidationResult):
+#     if info.grn_date:
+#         try:
+#             datetime.strptime(info.grn_date, "%d/%m/%Y")
+#         except ValueError:
+#             validation_result.add_error("format_validation", "Invalid GRN date format. Expected: DD/MM/YYYY")
+from fastapi import FastAPI, HTTPException, Depends
+from pydantic import BaseModel, Field, ValidationError, model_validator, validator
+import re
+import asyncio
+from datetime import datetime
+from fastapi.responses import JSONResponse
+from fastapi.exceptions import RequestValidationError
+from starlette.requests import Request
+from typing import List, Optional
+
+app = FastAPI()
+
+# Regex patterns for validation
+PAN_REGEX = r'^[A-Z]{5}[0-9]{4}[A-Z]$'  # Format: ABCDE1234F
+GST_REGEX = r'^[0-9]{2}[A-Z]{5}[0-9]{4}[A-Z][0-9]{1}[Z][0-9A-Z]{1}$'  # Format: 12ABCDE1234F1Z5
+
+# External API endpoints for data retrieval
+FIELD_RECOMMEND_API = "http://localhost:8000/field-recommend"
+GST_CHECK_API = "http://localhost:8000/gst-check"
+USER_MAPPING_API = "http://localhost:8000/user-mapping"
+
+
+class ValidationResult:
+    """ Stores validation errors and categorizes them into different types. """
+    def __init__(self):
+        self.errors = {
+            "mandatory_validation": [],
+            "format_validation": [],
+            "gst_validation": [],
+            "invoice_validation": [],
+            "product_validation": [],
+            "other_validation": []
+        }
+
+    def add_error(self, category: str, error: str):
+        if category in self.errors:
+            self.errors[category].append(error)
+
+    def add_mandatory_error(self, field_name: str):
+        self.errors["mandatory_validation"].append(f"{field_name} is required")
+
+    def has_errors(self):
+        return any(len(errors) > 0 for errors in self.errors.values())
+
+    def get_errors(self):
+        return {k: v for k, v in self.errors.items() if v}
+
+
+# -------------- Data Models --------------
+class SupplierDetails(BaseModel):
+    supplier_name: str
+    supplier_address: str
+    supplier_state_name: Optional[str]
+    supplier_state_code: Optional[int]
+    supplier_gst_no: Optional[str] = Field(None, pattern=GST_REGEX)
+    supplier_pan_no: Optional[str] = Field(None, pattern=PAN_REGEX)
+    supplier_dispatch_location: Optional[str]
+
+class BillToDetails(BaseModel):
+    invoice_no: str
+    invoice_date: str
+    buyer_name: str
+    buyer_address: str
+    buyer_gst_no: str = Field(..., pattern=GST_REGEX)
+    buyer_state_name: str
+    buyer_state_code: int
+    buyer_pan_no: Optional[str] = Field(None, pattern=PAN_REGEX)
+    buyer_dispatch_location: Optional[str]
+
+class ShipToDetails(BaseModel):
+    party_name: Optional[str]
+    party_address: Optional[str]
+    party_gst_no: Optional[str] = Field(None, pattern=GST_REGEX)
+    party_pan_no: Optional[str] = Field(None, pattern=PAN_REGEX)
+    party_state_name: Optional[str]
+    party_state_code: Optional[int]
+    party_dispatch_location: Optional[str]
+
+class TransportDetails(BaseModel):
+    transport_name: Optional[str]
+    vehicle_details: Optional[str]
+    lr_details: Optional[str]
+
+class SalesProductService(BaseModel):
+    product_service_description: str
+    item_name: Optional[str]
+    hsn: int
+    sac: Optional[int]
+    quantity: float
+    unit: str
+    rate: float
+    amount: float
+    discount: Optional[float]
+    gst_rate_igst: Optional[float]
+    gst_rate_cgst: Optional[float]
+    gst_rate_sgst: Optional[float]
+    gst_rate_cess: Optional[float]
+    gst_amount: float
+    round_off: Optional[float]
+    invoice_amount: Optional[float]
+
+class GSTSummary(BaseModel):
+    hsn: int
+    sac: Optional[int]
+    taxable_value: float
+    sgst_rate: float
+    sgst_amount: float
+    cgst_rate: float
+    cgst_amount: float
+    total_tax_amount: float
+
+class AdditionalInformation(BaseModel):
+    remarks: Optional[str]
+    authorized_signatory: str
+
+class OtherInformation(BaseModel):
+    po_number: Optional[str]
+    grn_date: Optional[str]
+    grn_no: Optional[str]
+    payment_terms: Optional[str]
+    e_way_bill_details: Optional[str]
+    e_invoice_qr_code: Optional[str]
+    e_invoice_irn: Optional[str]
+    tax_applicability_on_rcm: Optional[str]
+
+class ExtractedData(BaseModel):
+    supplier_details: SupplierDetails
+    bill_to_details: BillToDetails
+    ship_to_details: ShipToDetails
+    transport_details: TransportDetails
+    other_information: OtherInformation
+    sales_of_product_services: List[SalesProductService]
+    gst_summary: List[GSTSummary]
+    additional_information: AdditionalInformation
+
+class InvoiceValidationRequest(BaseModel):
+    extracted_data: ExtractedData
+
+
+# -------------- Validation Functions --------------
+async def validate_invoice(request: InvoiceValidationRequest):
+    validation_result = ValidationResult()
+
+    try:
+        extracted_data = request.extracted_data
+
+        # Concurrent Validation Calls (Avoid Race Conditions)
+        await asyncio.gather(
+            validate_supplier_gst(extracted_data.supplier_details, validation_result),
+            validate_buyer_gst(extracted_data.bill_to_details, validation_result),
+            validate_invoice_date(extracted_data.bill_to_details, validation_result),
+            validate_cgst_sgst_vs_igst(
+                extracted_data.supplier_details,
+                extracted_data.bill_to_details,
+                extracted_data.sales_of_product_services,
+                validation_result
+            ),
+            validate_authorized_signatory(extracted_data.additional_information, validation_result)
+        )
+
+        # Check if sales_of_product_services is empty
+        if not extracted_data.sales_of_product_services:
+            validation_result.add_mandatory_error("sales_of_product_services")
+
+    except ValidationError as e:
+        for error in e.errors():
+            field_location = " -> ".join(str(loc) for loc in error["loc"])
+            validation_result.add_error("format_validation", f"{field_location}: {error['msg']}")
+
+    except Exception as e:
+        validation_result.add_error("format_validation", f"Error processing request: {str(e)}")
+
+    if validation_result.has_errors():
+        return JSONResponse(status_code=422, content={"validation_errors": validation_result.get_errors()})
+
+    return {"message": "Invoice validation passed"}
+
+
+# -------------- Async Validators --------------
+async def validate_supplier_gst(supplier: SupplierDetails, validation_result: ValidationResult):
+    if supplier.supplier_gst_no and not re.match(GST_REGEX, supplier.supplier_gst_no):
+        validation_result.add_error("gst_validation", "Invalid supplier GST number format")
+
+async def validate_buyer_gst(buyer: BillToDetails, validation_result: ValidationResult):
+    if not re.match(GST_REGEX, buyer.buyer_gst_no):
+        validation_result.add_error("gst_validation", "Invalid buyer GST number format")
+
+async def validate_invoice_date(buyer: BillToDetails, validation_result: ValidationResult):
+    try:
+        datetime.strptime(buyer.invoice_date, "%d/%m/%Y")
+    except ValueError:
+        validation_result.add_error("invoice_validation", "Invalid invoice date format. Expected: DD/MM/YYYY")
+
+async def validate_cgst_sgst_vs_igst(supplier: SupplierDetails, buyer: BillToDetails,
+                                     products: List[SalesProductService], validation_result: ValidationResult):
+    for product in products:
+        if product.gst_rate_igst and (product.gst_rate_cgst or product.gst_rate_sgst):
+            validation_result.add_error("gst_validation", "Product cannot have both IGST and CGST/SGST rates")
+
+async def validate_authorized_signatory(info: AdditionalInformation, validation_result: ValidationResult):
+    if not info.authorized_signatory:
+        validation_result.add_mandatory_error("authorized_signatory")
+
+
+# -------------- API Route --------------
+@app.post("/validate-invoice")
+async def validate_invoice_api(request: InvoiceValidationRequest):
+    return await validate_invoice(request)

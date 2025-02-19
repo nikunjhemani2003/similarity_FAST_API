@@ -27,7 +27,8 @@ class FieldRecommendRequest(BaseModel):
         if v not in allowed_tables:
             raise ValueError('Invalid table name.')
         return v
-
+class AddressRecommendRequest(BaseModel):
+    address:str
 class GSTCheckRequest(BaseModel):
     gst_no: str
 
@@ -56,8 +57,7 @@ async def field_recommend(request: FieldRecommendRequest):
         # Different queries for each table
         if request.table_name == "users":
             query = """
-                SELECT id, name, address, state_name, state_code, gst_no, pan_number, created_at, 
-                       similarity(name, %s) AS similarity_score
+                SELECT similarity(name, %s) AS similarity_score,name, address, state_name, state_code, gst_no, pan_number
                 FROM users
                 ORDER BY similarity_score DESC
                 LIMIT 3;
@@ -65,8 +65,7 @@ async def field_recommend(request: FieldRecommendRequest):
             cursor.execute(query, (request.name,))
         else:  # product table
             query = """
-                SELECT id, item_name, hsn_sac, unit, rate, igst, cgst, sgst, cess,
-                       similarity(item_name, %s) AS similarity_score
+                SELECT similarity(item_name, %s) AS similarity_score,item_name, hsn_sac, unit, rate, igst, cgst, sgst, cess
                 FROM product
                 ORDER BY similarity_score DESC
                 LIMIT 3;
@@ -81,14 +80,44 @@ async def field_recommend(request: FieldRecommendRequest):
 
         # Return JSON response
         return {
-            "input_name": request.name, 
-            "table": request.table_name, 
-            "recommendations": results
+            "recommendations": results,
+            "table": request.table_name 
         }
 
     except Exception as e:
         raise HTTPException(status_code=500, detail=str(e))
 
+@app.post("/address-recommend")
+async def field_recommend(request: AddressRecommendRequest):
+    """
+    API endpoint to recommend similar names based on fuzzy matching.
+    """
+    try:
+        conn = get_db_connection()
+        cursor = conn.cursor()
+
+        # Different queries for each table
+        query = """
+                SELECT similarity(address, %s) AS similarity_score, name, address, state_name, state_code, gst_no, pan_number
+                FROM users
+                ORDER BY similarity_score DESC
+                LIMIT 3;
+            """
+        cursor.execute(query, (request.address,))
+
+        results = cursor.fetchall()
+
+        # Close database connection
+        cursor.close()
+        conn.close()
+
+        # Return JSON response
+        return {
+            "recommendations": results,
+        }
+
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=str(e))
 
 
 @app.post("/gst-check")
@@ -384,15 +413,17 @@ async def validate_invoice(request: InvoiceValidationRequest):
         error_list = []
 
         # Extract invoice date from the request
+        extracted_data = request.extracted_data
 
-        supplier_details = request.extracted_data.get("supplier_details", {})
-        bill_to_details = request.extracted_data.get("bill_to_details", {})
-        ship_to_details = request.extracted_data.get("ship_to_details", {})
-        transaction_details = request.extracted_data.get("transaction_details", {})
-        other_details = request.extracted_data.get("other_details", {})
-        sales_of_product_services = request.extracted_data.get("sales_of_product_services", [])  # Note: Default to empty list
-        gst_summary = request.extracted_data.get("gst_summary", [])
-        additional_information = request.extracted_data.get("additional_information", {})
+
+        supplier_details = extracted_data.get("supplier_details", {})
+        bill_to_details = extracted_data.get("bill_to_details", {})
+        ship_to_details = extracted_data.get("ship_to_details", {})
+        transaction_details = extracted_data.get("transaction_details", {})
+        other_details = extracted_data.get("other_details", {})
+        sales_of_product_services = extracted_data.get("sales_of_product_services", [])  # Note: Default to empty list
+        gst_summary = extracted_data.get("gst_summary", [])
+        additional_information = extracted_data.get("additional_information", {})
 
         #Validation for supplier_details
         supplier_name = supplier_details.get("supplier_name")
@@ -403,19 +434,26 @@ async def validate_invoice(request: InvoiceValidationRequest):
         supplier_pan_no = supplier_details.get("supplier_pan_no")
 
         supplier_gst_validation_task = validate_gst_number(supplier_name,supplier_address,supplier_gst_no,supplier_state_name,supplier_state_code,supplier_pan_no,"supplier")
-        supplier_gst_validation_result = await supplier_gst_validation_task
-        if (error := supplier_gst_validation_result):
+        supplier_error,supplier_recommended_fields = await supplier_gst_validation_task
+        if (error := supplier_error):
+            if(supplier_recommended_fields):
+                extracted_data["supplier_details_gst_recommended_fields"]=supplier_recommended_fields
             error_list.append(error)    
 
         supplier_name_validation_task = validate_name_in_db("users",supplier_name,supplier_gst_no)
-        supplier_name_validation_result = await supplier_name_validation_task
-        if (error := supplier_name_validation_result):
+        supplier_name_error,supplier_name_recommended_fields = await supplier_name_validation_task
+        print(supplier_name_error,supplier_name_recommended_fields)
+        if (error := supplier_name_error):
             error_list.append(error)
+            if(supplier_name_recommended_fields):
+                extracted_data["supplier_details_name_recommended_fields"]=supplier_name_recommended_fields
 
-        supplier_address_validation_task = validate_address_in_db(supplier_address,supplier_gst_no)
-        supplier_address_validation_result = await supplier_address_validation_task
-        if (error := supplier_address_validation_result):
+        supplier_address_validation_task = validate_address_in_db(supplier_address,supplier_gst_no,supplier_name)
+        supplier_address_error,supplier_address_recommended_fields = await supplier_address_validation_task
+        if (error := supplier_address_error):
             error_list.append(error)
+            if(supplier_address_recommended_fields):
+                extracted_data["supplier_details_address_recommended_fields"]=supplier_address_recommended_fields
             
             
         if(error := validate_pan_number(supplier_pan_no,"supplier")):
@@ -436,7 +474,7 @@ async def validate_invoice(request: InvoiceValidationRequest):
 
 
 
-        # For bill_to_details
+        # # For bill_to_details
         if (error := validate_invoice_date(bill_to_invoice_date)):
             error_list.append(error)
         if (error := validate_invoice_number(bill_to_invoice_no)):
@@ -444,27 +482,35 @@ async def validate_invoice(request: InvoiceValidationRequest):
         
 
         gst_validation_task = validate_gst_number(bill_to_name,bill_to_address,bill_to_gst_no,bill_to_state_name,bill_to_state_code,bill_to_pan_no,"Buyer")  
-        gst_validation_result = await gst_validation_task
-        if (error := gst_validation_result):
+        gst_error,gst_recommended_fields = await gst_validation_task
+        if (error := gst_error):
+            if(gst_recommended_fields):
+                extracted_data["bill_to_details_gst_recommended_fields"]=gst_recommended_fields
             error_list.append(error)
 
 
         name_validation_task = validate_name_in_db("users",bill_to_name,bill_to_gst_no)
-        name_validation_result = await name_validation_task
-        if (error := name_validation_result):
+        name_error,name_recommended_fields = await name_validation_task
+        if (error := name_error):
             error_list.append(error)
+            if(name_recommended_fields):
+                extracted_data["bill_to_details_name_recommended_fields"]=name_recommended_fields
 
-        address_validation_task = validate_address_in_db(bill_to_address,bill_to_gst_no)
-        address_validation_result = await address_validation_task
-        if (error := address_validation_result):
+        address_validation_task = validate_address_in_db(bill_to_address,bill_to_gst_no,bill_to_name)
+        address_error,address_recommended_fields = await address_validation_task
+        if (error := address_error):
             error_list.append(error)
+            if(address_recommended_fields):
+                extracted_data["bill_to_details_address_recommended_fields"]=address_recommended_fields
+
+
 
         if(error := validate_pan_number(bill_to_pan_no,"Buyer")):
             error_list.append(error)
 
 
 
-        # validation for Party_name
+        # # validation for Party_name
         party_name = ship_to_details.get("party_name")
         party_address = ship_to_details.get("party_address")
         party_gst_no = ship_to_details.get("party_gst_no")
@@ -473,43 +519,53 @@ async def validate_invoice(request: InvoiceValidationRequest):
         party_pan_no = ship_to_details.get("party_pan_no")
 
         party_gst_validation_task = validate_gst_number(party_name,party_address,party_gst_no,party_state_name,party_state_code,party_pan_no,"Party")
-        party_gst_validation_result = await party_gst_validation_task
-        if (error := party_gst_validation_result):
+        party_error,party_recommended_fields = await party_gst_validation_task
+        if (error := party_error):
+            if(party_recommended_fields):
+                extracted_data["ship_to_details_gst_recommended_fields"]=party_recommended_fields
             error_list.append(error)    
 
         party_name_validation_task = validate_name_in_db("users",party_name,party_gst_no)
-        party_name_validation_result = await party_name_validation_task
-        if (error := party_name_validation_result):
+        party_name_error,party_name_recommended_fields = await party_name_validation_task
+        if (error := party_name_error):
             error_list.append(error)
+            if(party_name_recommended_fields):
+                extracted_data["ship_to_details_name_recommended_fields"]=party_name_recommended_fields
 
-        party_address_validation_task = validate_address_in_db(party_address,party_gst_no)
-        party_address_validation_result = await party_address_validation_task
-        if (error := party_address_validation_result):
+        party_address_validation_task = validate_address_in_db(party_address,party_gst_no,party_name)
+        party_address_error,party_address_recommended_fields = await party_address_validation_task
+        if (error := party_address_error):
             error_list.append(error)
+            if(party_address_recommended_fields):
+                extracted_data["ship_to_details_address_recommended_fields"]=party_address_recommended_fields
 
         if(error := validate_pan_number(party_pan_no,"Party")):
             error_list.append(error)
         
         
 
-        # sales_of_product_services validation
-        # item_name validation
-        item_name_validation_task = [
+        # # sales_of_product_services validation
+        item_name_validation_tasks = [
             validate_name_in_db("product", data.get("product_service_description"), None) 
             for data in sales_of_product_services
         ]
-        
-        item_name_validation_result = await asyncio.gather(*item_name_validation_task)
-        
-        for error in item_name_validation_result:
+        print(item_name_validation_tasks)
+
+        # Gather all validation results
+        item_validation_results = await asyncio.gather(*item_name_validation_tasks)
+
+        # Process results and collect recommendations
+        for index, (error, recommendations) in enumerate(item_validation_results):
             if error:
                 error_list.append(error)
+                if(recommendations):
+                    extracted_data[f"product_service_{index}_recommended_fields"] = recommendations
 
         # If no errors found, return success message
         if not error_list:
-            return {"status": "success", "message": "All validations passed"}
+            return {"status": "success", "message": "All validations passed", "extracted_data":request.extracted_data}
             
-        return {"status": "error", "errors": error_list}
+        return {"status": "error", "errors": error_list,"extracted_data":request.extracted_data}
 
     except Exception as e:
         raise HTTPException(status_code=500, detail=str(e))

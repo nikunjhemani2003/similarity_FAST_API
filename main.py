@@ -410,18 +410,28 @@ async def validate_invoice(request: InvoiceValidationRequest):
     API endpoint to validate AI generated invoice data
     """
     try:
-        error_list = []
-
         # Extract invoice date from the request
         extracted_data = request.extracted_data
 
 
         supplier_details = extracted_data.get("supplier_details", {})
+        supplier_details["error_status"]=False
+        supplier_details["error"]={}
+        supplier_details["recommended_fields"]=[]
         bill_to_details = extracted_data.get("bill_to_details", {})
+        bill_to_details["error_status"]=False
+        bill_to_details["error"]={}
+        bill_to_details["recommended_fields"]=[]
         ship_to_details = extracted_data.get("ship_to_details", {})
+        ship_to_details["error_status"]=False
+        ship_to_details["error"]={}
+        ship_to_details["recommended_fields"]=[]
         transaction_details = extracted_data.get("transaction_details", {})
         other_details = extracted_data.get("other_details", {})
         sales_of_product_services = extracted_data.get("sales_of_product_services", [])  # Note: Default to empty list
+        # sales_of_product_services.insert(0,{"error_status":False,"error ":[]})
+        # sales_of_product_services.insert(0,{"error_status":False,"error ":[]})
+        # sales_of_product_services.insert(1,{"recommended_fields":[]})
         gst_summary = extracted_data.get("gst_summary", [])
         additional_information = extracted_data.get("additional_information", {})
 
@@ -436,30 +446,46 @@ async def validate_invoice(request: InvoiceValidationRequest):
         supplier_gst_validation_task = validate_gst_number(supplier_name,supplier_address,supplier_gst_no,supplier_state_name,supplier_state_code,supplier_pan_no,"supplier")
         supplier_error,supplier_recommended_fields = await supplier_gst_validation_task
         if (error := supplier_error):
+            supplier_details["error_status"]=True
             if(supplier_recommended_fields):
-                extracted_data["supplier_details_gst_recommended_fields"]=supplier_recommended_fields
-            error_list.append(error)    
+                supplier_details["recommended_fields"].append(supplier_recommended_fields)
+            supplier_details["error"].update(error)
 
-        supplier_name_validation_task = validate_name_in_db("users",supplier_name,supplier_gst_no)
-        supplier_name_error,supplier_name_recommended_fields = await supplier_name_validation_task
-        print(supplier_name_error,supplier_name_recommended_fields)
+
+        supplier_name_validation_task = validate_name_in_db("users",supplier_name,supplier_gst_no,"supplier")
+        supplier_name_error, supplier_name_recommended_fields = await supplier_name_validation_task
+
         if (error := supplier_name_error):
-            error_list.append(error)
-            if(supplier_name_recommended_fields):
-                extracted_data["supplier_details_name_recommended_fields"]=supplier_name_recommended_fields
+            supplier_details["error_status"] = True
+            supplier_details["error"].update(error)
+            
+            if supplier_name_recommended_fields:
+                # Ensure the recommended fields remain a flat list
+                if isinstance(supplier_name_recommended_fields, list):
+                    supplier_details["recommended_fields"].extend(supplier_name_recommended_fields)
+                else:
+                    supplier_details["recommended_fields"].append(supplier_name_recommended_fields)
 
-        supplier_address_validation_task = validate_address_in_db(supplier_address,supplier_gst_no,supplier_name)
-        supplier_address_error,supplier_address_recommended_fields = await supplier_address_validation_task
+        supplier_address_validation_task = validate_address_in_db(supplier_address, supplier_gst_no, supplier_name, "supplier")
+        supplier_address_error, supplier_address_recommended_fields = await supplier_address_validation_task
+
         if (error := supplier_address_error):
-            error_list.append(error)
-            if(supplier_address_recommended_fields):
-                extracted_data["supplier_details_address_recommended_fields"]=supplier_address_recommended_fields
-            
-            
-        if(error := validate_pan_number(supplier_pan_no,"supplier")):
-            error_list.append(error)
+            supplier_details["error_status"] = True
+            supplier_details["error"].update(error)
 
-        #Validation for bill_to_details
+            if supplier_address_recommended_fields:
+                # Ensure the recommended fields remain a flat list
+                if isinstance(supplier_address_recommended_fields, list):
+                    supplier_details.setdefault("recommended_fields", []).extend(supplier_address_recommended_fields)
+                else:
+                    supplier_details.setdefault("recommended_fields", []).append(supplier_address_recommended_fields)
+
+                    
+                if(error := validate_pan_number(supplier_pan_no,"supplier")):
+                    supplier_details["error_status"]=True
+                    supplier_details["error"].update(error)
+
+        # #Validation for bill_to_details
 
         bill_to_invoice_date = bill_to_details.get("invoice_date")
         bill_to_invoice_no = bill_to_details.get("invoice_no")
@@ -470,47 +496,66 @@ async def validate_invoice(request: InvoiceValidationRequest):
         bill_to_address = bill_to_details.get("buyer_address")
         bill_to_pan_no = bill_to_details.get("buyer_pan_no")
 
-        # Extract product details from the request
+        # # # Extract product details from the request
 
 
-
-        # # For bill_to_details
-        if (error := validate_invoice_date(bill_to_invoice_date)):
-            error_list.append(error)
-        if (error := validate_invoice_number(bill_to_invoice_no)):
-            error_list.append(error)
+        
+        # # # # For bill_to_details
+        if (error := validate_invoice_date(bill_to_invoice_date,"buyer")):
+            bill_to_details["error_status"]=True
+            bill_to_details["error"]=error
+        if (error := validate_invoice_number(bill_to_invoice_no,"buyer")):
+            bill_to_details["error_status"]=True
+            bill_to_details["error"].update(error)
         
 
-        gst_validation_task = validate_gst_number(bill_to_name,bill_to_address,bill_to_gst_no,bill_to_state_name,bill_to_state_code,bill_to_pan_no,"Buyer")  
+        gst_validation_task = validate_gst_number(bill_to_name,bill_to_address,bill_to_gst_no,bill_to_state_name,bill_to_state_code,bill_to_pan_no,"buyer")  
         gst_error,gst_recommended_fields = await gst_validation_task
         if (error := gst_error):
+            bill_to_details["error_status"]=True
             if(gst_recommended_fields):
-                extracted_data["bill_to_details_gst_recommended_fields"]=gst_recommended_fields
-            error_list.append(error)
+                bill_to_details["recommended_fields"].append(gst_recommended_fields)
+            bill_to_details["error"].update(error)
 
 
-        name_validation_task = validate_name_in_db("users",bill_to_name,bill_to_gst_no)
-        name_error,name_recommended_fields = await name_validation_task
+        name_validation_task = validate_name_in_db("users",bill_to_name,bill_to_gst_no,"buyer")
+        name_error, name_recommended_fields = await name_validation_task
+
         if (error := name_error):
-            error_list.append(error)
-            if(name_recommended_fields):
-                extracted_data["bill_to_details_name_recommended_fields"]=name_recommended_fields
+            bill_to_details["error_status"] = True
+            bill_to_details["error"].update(error)
 
-        address_validation_task = validate_address_in_db(bill_to_address,bill_to_gst_no,bill_to_name)
-        address_error,address_recommended_fields = await address_validation_task
+            if name_recommended_fields:
+                # Ensure the recommended fields remain a flat list
+                if isinstance(name_recommended_fields, list):
+                    bill_to_details["recommended_fields"].extend(name_recommended_fields)
+                else:
+                    bill_to_details["recommended_fields"].append(name_recommended_fields)
+
+
+        address_validation_task = validate_address_in_db(bill_to_address, bill_to_gst_no, bill_to_name,"buyer")
+        address_error, address_recommended_fields = await address_validation_task
+
         if (error := address_error):
-            error_list.append(error)
-            if(address_recommended_fields):
-                extracted_data["bill_to_details_address_recommended_fields"]=address_recommended_fields
+            bill_to_details["error_status"] = True
+            bill_to_details["error"].update(error)
+
+            if address_recommended_fields:
+                # Ensure the recommended fields remain a flat list
+                if isinstance(address_recommended_fields, list):
+                    bill_to_details.setdefault("recommended_fields", []).extend(address_recommended_fields)
+                else:
+                    bill_to_details.setdefault("recommended_fields", []).append(address_recommended_fields)
 
 
 
-        if(error := validate_pan_number(bill_to_pan_no,"Buyer")):
-            error_list.append(error)
+        if(error := validate_pan_number(bill_to_pan_no,"buyer")):
+            bill_to_details["error_status"]=True
+            bill_to_details["error"].update(error)
 
 
 
-        # # validation for Party_name
+        # # # # validation for Party_name
         party_name = ship_to_details.get("party_name")
         party_address = ship_to_details.get("party_address")
         party_gst_no = ship_to_details.get("party_gst_no")
@@ -518,54 +563,91 @@ async def validate_invoice(request: InvoiceValidationRequest):
         party_state_code = ship_to_details.get("party_state_code")
         party_pan_no = ship_to_details.get("party_pan_no")
 
-        party_gst_validation_task = validate_gst_number(party_name,party_address,party_gst_no,party_state_name,party_state_code,party_pan_no,"Party")
+        party_gst_validation_task = validate_gst_number(party_name,party_address,party_gst_no,party_state_name,party_state_code,party_pan_no,"party")
         party_error,party_recommended_fields = await party_gst_validation_task
         if (error := party_error):
+            ship_to_details["error_status"]=True
             if(party_recommended_fields):
-                extracted_data["ship_to_details_gst_recommended_fields"]=party_recommended_fields
-            error_list.append(error)    
+                ship_to_details["recommended_fields"].append(party_recommended_fields)
+            ship_to_details["error"].update(error)    
 
-        party_name_validation_task = validate_name_in_db("users",party_name,party_gst_no)
-        party_name_error,party_name_recommended_fields = await party_name_validation_task
+        party_name_validation_task = validate_name_in_db("users", party_name, party_gst_no, "party")
+        party_name_error, party_name_recommended_fields = await party_name_validation_task
+
         if (error := party_name_error):
-            error_list.append(error)
-            if(party_name_recommended_fields):
-                extracted_data["ship_to_details_name_recommended_fields"]=party_name_recommended_fields
+            ship_to_details["error_status"] = True
+            ship_to_details["error"].update(error)
 
-        party_address_validation_task = validate_address_in_db(party_address,party_gst_no,party_name)
-        party_address_error,party_address_recommended_fields = await party_address_validation_task
+            if party_name_recommended_fields:
+                # Ensure the recommended fields remain a flat list
+                if isinstance(party_name_recommended_fields, list):
+                    ship_to_details.setdefault("recommended_fields", []).extend(party_name_recommended_fields)
+                else:
+                    ship_to_details.setdefault("recommended_fields", []).append(party_name_recommended_fields)
+
+
+        party_address_validation_task = validate_address_in_db(party_address, party_gst_no, party_name, "party")
+        party_address_error, party_address_recommended_fields = await party_address_validation_task
+
         if (error := party_address_error):
-            error_list.append(error)
-            if(party_address_recommended_fields):
-                extracted_data["ship_to_details_address_recommended_fields"]=party_address_recommended_fields
+            ship_to_details["error_status"] = True
+            ship_to_details["error"].update(error)
 
-        if(error := validate_pan_number(party_pan_no,"Party")):
-            error_list.append(error)
+            if party_address_recommended_fields:
+                # Ensure the recommended fields remain a flat list
+                if isinstance(party_address_recommended_fields, list):
+                    ship_to_details.setdefault("recommended_fields", []).extend(party_address_recommended_fields)
+                else:
+                    ship_to_details.setdefault("recommended_fields", []).append(party_address_recommended_fields)
+
+
+                if(error := validate_pan_number(party_pan_no,"party")):
+                    ship_to_details["error_status"]=True
+                    ship_to_details["error"].update(error)
         
         
 
-        # # sales_of_product_services validation
-        item_name_validation_tasks = [
-            validate_name_in_db("product", data.get("product_service_description"), None) 
-            for data in sales_of_product_services
-        ]
-        print(item_name_validation_tasks)
+        # # # sales_of_product_services validation
+        # item_name_validation_tasks = [
+        #     validate_name_in_db("product", data.get("product_service_description"), None) 
+        #     for data in sales_of_product_services
+        # ]
 
-        # Gather all validation results
-        item_validation_results = await asyncio.gather(*item_name_validation_tasks)
+        # # # Gather all validation results
+        # item_validation_results = await asyncio.gather(*item_name_validation_tasks)
 
-        # Process results and collect recommendations
-        for index, (error, recommendations) in enumerate(item_validation_results):
-            if error:
-                error_list.append(error)
-                if(recommendations):
-                    extracted_data[f"product_service_{index}_recommended_fields"] = recommendations
+        # # Process results and collect recommendations
+        # for index, (error, recommendations) in enumerate(item_validation_results):
+        #     if error:
+        #         sales_of_product_services[0]["error"].append(error)
+        #         if(recommendations):
+        #             sales_of_product_services[1]["recommended_fields"].append(recommendations)
+        try:
+            # Create validation tasks for each product
+            item_name_validation_tasks = [
+                validate_name_in_db("product", data.get("product_service_description"), None, "product_service_description") 
+                for data in sales_of_product_services
+            ]
 
-        # If no errors found, return success message
-        if not error_list:
-            return {"status": "success", "message": "All validations passed", "extracted_data":request.extracted_data}
-            
-        return {"status": "error", "errors": error_list,"extracted_data":request.extracted_data}
+            # Gather all validation results
+            item_validation_results = await asyncio.gather(*item_name_validation_tasks)
+
+            # Process results and collect recommendations for each item separately
+            for index, (error, recommendations) in enumerate(item_validation_results):
+                sales_of_product_services[index]["error_status"]=False
+                sales_of_product_services[index]["error"]={}
+                sales_of_product_services[index]["recommended_fields"]=[]
+                if error:
+                    sales_of_product_services[index]["error_status"]=True
+                    sales_of_product_services[index]["error"].update(error)
+                    
+                    if recommendations:
+                        sales_of_product_services[index]["recommended_fields"].extend(recommendations)
+
+        except Exception as e:
+            raise HTTPException(status_code=500, detail=str(e))
+
+        return {"extracted_data":request.extracted_data}
 
     except Exception as e:
         raise HTTPException(status_code=500, detail=str(e))

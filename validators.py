@@ -1,6 +1,6 @@
 from datetime import datetime, timedelta
 
-def validate_invoice_date(invoice_date_str: str) -> dict:
+def validate_invoice_date(invoice_date_str: str,entity:str) -> dict | None:
     """
     Validates if the given invoice date is:
     1. In correct format (DD/MM/YYYY)
@@ -11,25 +11,24 @@ def validate_invoice_date(invoice_date_str: str) -> dict:
         invoice_date_str (str): Invoice date in DD/MM/YYYY format
         
     Returns:
-        dict: Validation result with status and message
+        dict | None: Returns error dict if invalid; otherwise, returns None
     """
-    if not invoice_date_str:
+
+    if not invoice_date_str or invoice_date_str.strip() == "" or invoice_date_str == "null":
         return {
-            "invoice_date": invoice_date_str,
-            "error": "Invoice date is missing"
+            f"{entity}_invoice_date": "Invoice date is missing"
         }
 
-    # Convert date string (DD/MM/YYYY) to datetime object
     try:    
         invoice_date = datetime.strptime(invoice_date_str, "%d/%m/%y")
     except ValueError:
         return {
-            "invoice_date": invoice_date_str,
-            "error": "Invalid date format. Expected DD/MM/YY"
+            f"{entity}_invoice_date": "Invalid date format. Expected DD/MM/YY"
         }
 
     # Get current date (without time)
     current_date = datetime.now().replace(hour=0, minute=0, second=0, microsecond=0)
+    print(current_date)
     
     # Calculate date 30 days ago
     thirty_days_ago = current_date - timedelta(days=30)
@@ -37,24 +36,20 @@ def validate_invoice_date(invoice_date_str: str) -> dict:
     # Validate future date
     if invoice_date > current_date:
         return {
-            "invoice_date": invoice_date_str,
-            "error": "Invoice date cannot be in the future"
+            f"{entity}_invoice_date": "Invoice date cannot be in the future"
         }
 
     # Validate if invoice is older than 30 days
     if invoice_date < thirty_days_ago:
+        print("Invoice date cannot be older than 30 days")
         return {
-            "invoice_date": invoice_date_str,
-            "error": "Invoice date cannot be older than 30 days"
+            f"{entity}_invoice_date": "Invoice date cannot be older than 30 days"
         }
 
-    # return {
-    #     "invoice_date": invoice_date_str,
-    #     "error": "Invoice date is valid"
-    # }
+    return None
 
 
-def validate_invoice_number(invoice_no: str) -> dict:
+def validate_invoice_number(invoice_no: str,entity:str) -> dict | None:
     """
     Validates if the invoice number is provided (mandatory field).
     
@@ -62,18 +57,13 @@ def validate_invoice_number(invoice_no: str) -> dict:
         invoice_no (str): Invoice number
         
     Returns:
-        dict: Validation result with status and message
+        dict | None: Returns error dict if invalid; otherwise, returns None
     """
     if not invoice_no or invoice_no.strip() == "" or invoice_no == "null":
         return {
-            "invoice_no": invoice_no,
-            "error": "Invoice number is required"
+            f"{entity}_invoice_no": "Invoice number is required"
         }
-
-    # return {
-    #     "invoice_no": invoice_no,
-    #     "error": "Invoice number is valid"
-    # }
+    # return None
 
 
 
@@ -87,7 +77,7 @@ import httpx  # Async HTTP client for API calls
 GST_REGEX = r'^[0-9]{2}[A-Z]{5}[0-9]{4}[A-Z][0-9][Z][0-9A-Z]$'  # GST Format: 12ABCDE1234F1Z5
 GST_CHECK_API = "http://localhost:8000/gst-check"  # API endpoint for checking GST
 
-async def validate_gst_number(name: str, address: str, gst_no: str,state_name:str, state_code: str,pan_no:str,entity:str) -> dict | None:
+async def validate_gst_number(name: str, address: str, gst_no: str, state_name:str, state_code: str, pan_no:str, entity:str) -> tuple[dict|None, dict]:
     """
     Validates the format of the GST number (if provided), checks if it exists in the database,
     and verifies that the provided fields match the database records.
@@ -101,30 +91,14 @@ async def validate_gst_number(name: str, address: str, gst_no: str,state_name:st
     try:
         entity_gst_no = gst_no
 
-        # If GST number is not provided, return tuple with None and empty dict
-        if not entity_gst_no or entity_gst_no == "":
+        if not entity_gst_no or entity_gst_no == "" or entity_gst_no == "null":
             return None, {}
 
         # Validate GST format
         if not re.match(GST_REGEX, entity_gst_no.strip()):
             return {
-                "gst_number": entity_gst_no,
-                "error": f"{entity} Invalid GST number format. Expected format: 12ABCDE1234F1Z5"
+                f"{entity}_gst_number": "Invalid GST number format. Expected format: 12ABCDE1234F1Z5"
             }, {}
-
-        # Validate required fields when GST is provided
-        missing_fields = []
-        entity_state_name = state_name
-        entity_state_code = state_code
-        # print("Hello")
-        # print(entity_state_name,entity_state_code)
-
-        if not entity_state_name or entity_state_name.strip() == "" or entity_state_name == "null" or entity_state_code == 0 or entity_state_code == "0":
-            missing_fields.append(f"{entity} state name is required when GST number is provided")
-        if entity_state_code is None or entity_state_code == "0" or entity_state_code == 0:
-            missing_fields.append(f"{entity} state code is required when GST number is provided")
-
-            
 
         # Check GST in database
         async with httpx.AsyncClient() as client:
@@ -132,68 +106,59 @@ async def validate_gst_number(name: str, address: str, gst_no: str,state_name:st
                 response = await client.post(
                     GST_CHECK_API, 
                     json={"gst_no": entity_gst_no.strip()},
-                    timeout=10.0  # Add timeout
+                    timeout=10.0
                 )
-                response.raise_for_status()  # Raise exception for non-200 status codes
+                response.raise_for_status()
             except httpx.HTTPError as e:
                 return {
-                    "gst_number": entity_gst_no,
-                    "error": f"{entity} Error checking GST number: {str(e)}"
+                    f"{entity}_gst_number": f"Error checking GST number: {str(e)}"
                 }, {}
 
         gst_data = response.json()
 
-        # If GST is not found in database
         if gst_data.get("status") == "not_found":
             return {
-                "gst_number": entity_gst_no,
-                "error": f"{entity} GST number not found in database"
+                f"{entity}_gst_number": f"GST number not found in database"
             }, {}
 
         # Validate database record matches
         db_entry = gst_data.get("matching_users", [{}])[0]
-        errors = []
-        recommended_fields={}
+        errors = {}
+        recommended_fields = {}
 
         # Compare fields (case-insensitive)
-        print(name,address,entity_state_name,entity_state_code)
         if db_entry.get("name", "").strip().lower() != name.strip().lower():
-            recommended_fields["new_name"]=db_entry.get("name", "").strip()
-            errors.append(f"{entity} Name does not match database record")
+            recommended_fields[f"{entity}_name"] = db_entry.get("name", "").strip()
+            errors[f"{entity}_name"] = "Name does not match database record"
         if db_entry.get("address", "").strip().lower() != address.strip().lower():
-            recommended_fields["new_address"]=db_entry.get("address", "").strip()
-            errors.append(f"{entity} Address does not match database record")
-        if db_entry.get("state_name", "").strip().lower() != entity_state_name.strip().lower():
-            recommended_fields["new_state_name"]=db_entry.get("state_name", "").strip()
-            errors.append(f"{entity} State name does not match database record")
-        if db_entry.get("state_code") != entity_state_code:
-            recommended_fields["new_state_code"]=db_entry.get("state_code")
-            errors.append(f"{entity} State code does not match database record")
+            recommended_fields[f"{entity}_address"] = db_entry.get("address", "").strip()
+            errors[f"{entity}_address"] = "Address does not match database record"
+        if db_entry.get("state_name", "").strip().lower() != state_name.strip().lower():
+            recommended_fields[f"{entity}_state_name"] = db_entry.get("state_name", "").strip()
+            errors[f"{entity}_state_name"] = "State name does not match database record"
+        if db_entry.get("state_code") != state_code:
+            recommended_fields[f"{entity}_state_code"] = db_entry.get("state_code")
+            errors[f"{entity}_state_code"] = "State code does not match database record"
         if not pan_no or db_entry.get("pan_number", "").lower() != pan_no.strip().lower():
-            recommended_fields["new_pan_number"]=db_entry.get("pan_number", "").strip()
-            errors.append(f"{entity} PAN number does not match database record")
+            recommended_fields[f"{entity}_pan_number"] = db_entry.get("pan_number", "").strip()
+            errors[f"{entity}_pan_number"] = "PAN number does not match database record"
 
-
-        if errors and missing_fields:
-            return {"gst_number": entity_gst_no, "error": errors + missing_fields}, recommended_fields
-        elif errors:
-            return {"gst_number": entity_gst_no, "error": errors}, recommended_fields
-        elif missing_fields:
-            return {"gst_number": entity_gst_no, "error": missing_fields}, recommended_fields
+        # Return errors if any exist
+        if errors:
+            return errors, recommended_fields
         
-        return None, {}  # All validations passed
+        return None, {}
 
     except Exception as e:
         return {
-            "gst_number": entity_gst_no if 'entity_gst_no' in locals() else None,
-            "error": f"{entity} Unexpected error during GST validation: {str(e)}"
+            f"{entity}_gst_number": f"Unexpected error during GST validation: {str(e)}"
         }, {}
 
 
 
 
 from database import get_db_connection
-async def validate_name_in_db(table_name: str, input_name: str, gst_no:str) -> tuple[dict|None, dict]:
+async def validate_name_in_db(table_name: str, input_name: str, gst_no:str,entity:str) -> tuple[dict|None, dict]:
     """
     Checks if the given name exists in the specified database table.
 
@@ -211,11 +176,11 @@ async def validate_name_in_db(table_name: str, input_name: str, gst_no:str) -> t
             
         if not input_name or input_name.strip() == "":
             if table_name == "users":
-                return {"error": "User name is required"}, {}
+                return {f"{entity}_name": "User name is required"}, {}
             elif table_name == "product":
-                return {"error": "Product name is required"}, {}
+                return {f"{entity}_name": "Product name is required"}, {}
             else:
-                return {"error": "User/Product name is required"}, {}
+                return {f"{entity}_name": "User/Product name is required"}, {}
         
         if gst_no:
             return None, {}
@@ -245,20 +210,19 @@ async def validate_name_in_db(table_name: str, input_name: str, gst_no:str) -> t
                     recommendations = response.json()
 
                     return {
-                        "input_name": input_name,
-                        "error": f"Name '{input_name}' not found in table '{table_name}'"
+                        f"{entity}_name": f"Name '{input_name}' not found in table '{table_name}'"
                     }, recommendations.get("recommendations", [])
                 except httpx.HTTPStatusError as e:
-                    return {"error": f"API returned {e.response.status_code}: {e.response.text}"}, {}
+                    return {f"{entity}_name": f"API returned {e.response.status_code}: {e.response.text}"}, {}
                 except httpx.RequestError as e:
-                    return {"error": f"API request failed: {str(e)}"}, {}
+                    return {f"{entity}_name": f"API request failed: {str(e)}"}, {}
 
         return None, {}  # Added empty dict as second return value
 
     except ValueError as ve:
-        return {"error": str(ve)}, {}
+        return {f"{entity}_name": str(ve)}, {}
     except Exception as e:
-        return {"error": f"Database error: {str(e)}"}, {}
+        return {f"{entity}_name": f"Database error: {str(e)}"}, {}
 
 
 from database import get_db_connection
@@ -312,7 +276,7 @@ from database import get_db_connection
 #     except Exception as e:
 #         return {"error": f"Database error: {str(e)}"}
 
-async def validate_address_in_db(input_address: str, gst_no: str,name:str) -> tuple[dict|None, dict]:
+async def validate_address_in_db(input_address: str, gst_no: str,name:str,entity:str) -> tuple[dict|None, dict]:
     """
     Checks if the given address exists in the 'users' table.
     If not found, uses field-recommend API to get similar addresses.
@@ -322,7 +286,7 @@ async def validate_address_in_db(input_address: str, gst_no: str,name:str) -> tu
             return None,{}
         
         if not input_address or input_address.strip() == "":
-            return {"error": "Address is required"},{}
+            return {f"{entity}_address": "Address is required"},{}
 
         conn = get_db_connection()
         cursor = conn.cursor()
@@ -348,27 +312,25 @@ async def validate_address_in_db(input_address: str, gst_no: str,name:str) -> tu
                     recommendations = response.json()
 
                     return {
-                        "input_address": input_address,
-                        "error": f"Address '{input_address}' not found in database"
+                        f"{entity}_address": f"Address '{input_address}' not found in database, Choose from the following recommendations"
                     },recommendations.get("recommendations", [])
                 except httpx.HTTPStatusError as e:
-                    return {"error": f"API returned {e.response.status_code}: {e.response.text}"},{}
+                    return {f"{entity}_address": f"API returned {e.response.status_code}: {e.response.text}"},{}
                 except httpx.RequestError as e:
-                    return {"error": f"API request failed: {str(e)}"},{}
+                    return {f"{entity}_address": f"API request failed: {str(e)}"},{}
 
         return None,{}
 
     except Exception as e:
-        return {"error": f"Database error: {str(e)}"},{}
+        return {f"{entity}_address": f"Database error: {str(e)}"},{}
 
 
 
 
 
-# ✅ PAN Format Regex Pattern (Strictly Enforces Format)
+
 # import re
 PAN_REGEX = r'^[A-Z]{5}[0-9]{4}[A-Z]$'
-
 def validate_pan_number(pan_no: str,entity:str) -> dict | None:
     """
     Validates the format of a PAN number.
@@ -380,12 +342,12 @@ def validate_pan_number(pan_no: str,entity:str) -> dict | None:
         dict | None: Returns an error message if invalid; otherwise, returns None.
     """
     # ✅ Ensure PAN number is provided
-    if not pan_no or pan_no.strip() == "":
+    if not pan_no or pan_no.strip() == "" or pan_no == "null":
         return None
 
     # ✅ Validate PAN format using regex
     if not re.match(PAN_REGEX, pan_no.strip()):
-        return {"pan_number": pan_no, "error": f"{entity} Invalid PAN number format. Expected format: ABCDE1234F"}
+        return {f"{entity}_pan_number": f"Invalid PAN number format. Expected format: ABCDE1234F"}
 
     # ✅ If PAN format is valid, return None (no error)
     return None

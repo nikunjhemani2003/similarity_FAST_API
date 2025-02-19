@@ -101,16 +101,16 @@ async def validate_gst_number(name: str, address: str, gst_no: str,state_name:st
     try:
         entity_gst_no = gst_no
 
-        # If GST number is not provided, return without error
-        if not entity_gst_no or entity_gst_no.strip() == "":
-            return None
+        # If GST number is not provided, return tuple with None and empty dict
+        if not entity_gst_no or entity_gst_no == "":
+            return None, {}
 
         # Validate GST format
         if not re.match(GST_REGEX, entity_gst_no.strip()):
             return {
                 "gst_number": entity_gst_no,
                 "error": f"{entity} Invalid GST number format. Expected format: 12ABCDE1234F1Z5"
-            }
+            }, {}
 
         # Validate required fields when GST is provided
         missing_fields = []
@@ -139,7 +139,7 @@ async def validate_gst_number(name: str, address: str, gst_no: str,state_name:st
                 return {
                     "gst_number": entity_gst_no,
                     "error": f"{entity} Error checking GST number: {str(e)}"
-                }
+                }, {}
 
         gst_data = response.json()
 
@@ -148,47 +148,52 @@ async def validate_gst_number(name: str, address: str, gst_no: str,state_name:st
             return {
                 "gst_number": entity_gst_no,
                 "error": f"{entity} GST number not found in database"
-            }
+            }, {}
 
         # Validate database record matches
         db_entry = gst_data.get("matching_users", [{}])[0]
         errors = []
+        recommended_fields={}
 
         # Compare fields (case-insensitive)
         print(name,address,entity_state_name,entity_state_code)
         if db_entry.get("name", "").strip().lower() != name.strip().lower():
+            recommended_fields["new_name"]=db_entry.get("name", "").strip()
             errors.append(f"{entity} Name does not match database record")
         if db_entry.get("address", "").strip().lower() != address.strip().lower():
+            recommended_fields["new_address"]=db_entry.get("address", "").strip()
             errors.append(f"{entity} Address does not match database record")
         if db_entry.get("state_name", "").strip().lower() != entity_state_name.strip().lower():
+            recommended_fields["new_state_name"]=db_entry.get("state_name", "").strip()
             errors.append(f"{entity} State name does not match database record")
         if db_entry.get("state_code") != entity_state_code:
+            recommended_fields["new_state_code"]=db_entry.get("state_code")
             errors.append(f"{entity} State code does not match database record")
-        if pan_no and db_entry.get("pan_number", "").strip().lower() != pan_no.strip().lower():
+        if not pan_no or db_entry.get("pan_number", "").lower() != pan_no.strip().lower():
+            recommended_fields["new_pan_number"]=db_entry.get("pan_number", "").strip()
             errors.append(f"{entity} PAN number does not match database record")
 
 
         if errors and missing_fields:
-            return {"gst_number": entity_gst_no, "error": errors + missing_fields}
+            return {"gst_number": entity_gst_no, "error": errors + missing_fields}, recommended_fields
         elif errors:
-            return {"gst_number": entity_gst_no, "error": errors}
+            return {"gst_number": entity_gst_no, "error": errors}, recommended_fields
         elif missing_fields:
-            return {"gst_number": entity_gst_no, "error": missing_fields}
+            return {"gst_number": entity_gst_no, "error": missing_fields}, recommended_fields
         
-
-        return None  # All validations passed
+        return None, {}  # All validations passed
 
     except Exception as e:
         return {
             "gst_number": entity_gst_no if 'entity_gst_no' in locals() else None,
             "error": f"{entity} Unexpected error during GST validation: {str(e)}"
-        }
+        }, {}
 
 
 
 
 from database import get_db_connection
-async def validate_name_in_db(table_name: str, input_name: str,gst_no:str) -> dict|None:
+async def validate_name_in_db(table_name: str, input_name: str, gst_no:str) -> tuple[dict|None, dict]:
     """
     Checks if the given name exists in the specified database table.
 
@@ -197,26 +202,26 @@ async def validate_name_in_db(table_name: str, input_name: str,gst_no:str) -> di
         input_name (str): The name to check.
 
     Returns:
-        dict | None: Returns None if the name exists, otherwise an error message.
+        tuple[dict|None, dict]: Returns (None, {}) if valid, otherwise (error_dict, recommendations)
     """
-    # Check if table_name and input_name are provided
-    if not table_name or table_name.strip() == "":
-        return {"error": "Table name is required"}
-    
-    if not input_name or input_name.strip() == "":
-        if(table_name == "users"):
-            return {"error": "Name is required"}
-        elif(table_name == "product"):
-            return {"error": "Product name is required"}
-        else:
-            return {"error": "User/Product name is required"}
-
     try:
+        # Check if table_name and input_name are provided
+        if not table_name or table_name.strip() == "":
+            raise ValueError("Table name is required")
+            
+        if not input_name or input_name.strip() == "":
+            if table_name == "users":
+                return {"error": "User name is required"}, {}
+            elif table_name == "product":
+                return {"error": "Product name is required"}, {}
+            else:
+                return {"error": "User/Product name is required"}, {}
+        
         if gst_no:
-            return None
+            return None, {}
+        
         conn = get_db_connection()
         cursor = conn.cursor()
-
         # Query to search for the name in a case-insensitive manner
         if(table_name == "users"):
             query = f"SELECT name FROM {table_name} WHERE LOWER(name) = LOWER(%s) LIMIT 1;"
@@ -225,45 +230,104 @@ async def validate_name_in_db(table_name: str, input_name: str,gst_no:str) -> di
         cursor.execute(query, (input_name.strip(),))
         result = cursor.fetchone()
 
-
         cursor.close()
         conn.close()
 
         if not result:
-            return {"input_name": input_name, "error": f"Name '{input_name}' not found in table '{table_name}'"}
+            async with httpx.AsyncClient() as client:
+                try:
+                    response = await client.post(
+                        "http://127.0.0.1:8000/field-recommend",
+                        json={"name": input_name.strip(),"table_name":table_name},
+                        timeout=10.0
+                    )
+                    response.raise_for_status()
+                    recommendations = response.json()
 
-        return None
+                    return {
+                        "input_name": input_name,
+                        "error": f"Name '{input_name}' not found in table '{table_name}'"
+                    }, recommendations.get("recommendations", [])
+                except httpx.HTTPStatusError as e:
+                    return {"error": f"API returned {e.response.status_code}: {e.response.text}"}, {}
+                except httpx.RequestError as e:
+                    return {"error": f"API request failed: {str(e)}"}, {}
 
+        return None, {}  # Added empty dict as second return value
+
+    except ValueError as ve:
+        return {"error": str(ve)}, {}
     except Exception as e:
-        return {"error": f"Database error: {str(e)}"}
+        return {"error": f"Database error: {str(e)}"}, {}
 
 
 from database import get_db_connection
 
-async def validate_address_in_db(input_address: str, gst_no: str) -> dict | None:
+# async def validate_address_in_db(input_address: str, gst_no: str) -> dict | None:
+#     """
+#     Checks if the given address exists in the 'users' table.
+#     If not found, uses field-recommend API to get similar addresses.
+#     """
+
+#     try:
+#         if gst_no:
+#             return None
+        
+#         if not input_address or input_address.strip() == "":
+#             return {"error": "Address is required"}
+
+#         conn = get_db_connection()
+#         cursor = conn.cursor()
+
+#         # Check for exact match first
+#         query = "SELECT address FROM users WHERE TRIM(LOWER(address)) = TRIM(LOWER(%s)) LIMIT 1;"
+#         cursor.execute(query, (input_address.strip(),))
+#         result = cursor.fetchone()
+
+#         cursor.close()
+#         conn.close()
+
+#         # If no exact match, get recommendations
+#         if not result:
+#             async with httpx.AsyncClient() as client:
+#                 response = await client.post(
+#                     "http://127.0.0.1:8000/field-recommend",
+#                     json={
+#                         "name": input_address.strip(),
+#                         "table_name": "users"
+#                     },
+#                     timeout=10.0
+#                 )
+#                 response.raise_for_status()
+#                 recommendations = response.json()
+
+#                 return {
+#                     "input_address": input_address,
+#                     "error": f"Address '{input_address}' not found in database",
+#                     "recommendations": recommendations.get("recommendations", [])
+#                 }
+
+#         return None
+
+#     except Exception as e:
+#         return {"error": f"Database error: {str(e)}"}
+
+async def validate_address_in_db(input_address: str, gst_no: str,name:str) -> tuple[dict|None, dict]:
     """
     Checks if the given address exists in the 'users' table.
-
-    Args:
-        input_address (str): The address to check.
-        gst_no (str): The GST number (if provided).
-
-    Returns:
-        dict | None: Returns None if the address exists, otherwise an error message.
+    If not found, uses field-recommend API to get similar addresses.
     """
-    # Check if input_address is provided
-    if not input_address or input_address.strip() == "":
-        return {"error": "Address is required"}
-
     try:
-        # ✅ If GST exists, assume the address is valid
-        if gst_no:
-            return None
+        if gst_no or name:
+            return None,{}
+        
+        if not input_address or input_address.strip() == "":
+            return {"error": "Address is required"},{}
 
         conn = get_db_connection()
         cursor = conn.cursor()
 
-        # ✅ Query to search for the address (case-insensitive)
+        # Check for exact match first
         query = "SELECT address FROM users WHERE TRIM(LOWER(address)) = TRIM(LOWER(%s)) LIMIT 1;"
         cursor.execute(query, (input_address.strip(),))
         result = cursor.fetchone()
@@ -271,14 +335,32 @@ async def validate_address_in_db(input_address: str, gst_no: str) -> dict | None
         cursor.close()
         conn.close()
 
-        # ✅ If no match found, return an error
+        # If no exact match, get recommendations
         if not result:
-            return {"input_address": input_address, "error": f"Address '{input_address}' not found in database"}
+            async with httpx.AsyncClient() as client:
+                try:
+                    response = await client.post(
+                        "http://127.0.0.1:8000/address-recommend",
+                        json={"address": input_address.strip()},
+                        timeout=10.0
+                    )
+                    response.raise_for_status()
+                    recommendations = response.json()
 
-        return None  # ✅ Address exists, no error
+                    return {
+                        "input_address": input_address,
+                        "error": f"Address '{input_address}' not found in database"
+                    },recommendations.get("recommendations", [])
+                except httpx.HTTPStatusError as e:
+                    return {"error": f"API returned {e.response.status_code}: {e.response.text}"},{}
+                except httpx.RequestError as e:
+                    return {"error": f"API request failed: {str(e)}"},{}
+
+        return None,{}
 
     except Exception as e:
-        return {"error": f"Database error: {str(e)}"}
+        return {"error": f"Database error: {str(e)}"},{}
+
 
 
 

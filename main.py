@@ -43,6 +43,7 @@ class UserNameMappingRequest(BaseModel):
 
 class InvoiceValidationRequest(BaseModel):
     extracted_data: dict
+    form_url:str
 
 
 @app.post("/field-recommend")
@@ -411,6 +412,10 @@ async def validate_invoice(request: InvoiceValidationRequest):
     """
     try:
         # Extract invoice date from the request
+        result = await check_and_validate_invoice(request.form_url)
+        if(result):
+           return result["extracted_data"]
+        
         extracted_data = request.extracted_data
 
 
@@ -664,6 +669,10 @@ async def validate_invoice(request: InvoiceValidationRequest):
 
         except Exception as e:
             raise HTTPException(status_code=500, detail=str(e))
+        await save_manual_changes(
+                request.form_url,
+            extracted_data
+            )
 
         return {"extracted_data":request.extracted_data}
 

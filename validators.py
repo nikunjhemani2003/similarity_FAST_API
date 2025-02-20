@@ -1,4 +1,6 @@
 from datetime import datetime, timedelta
+import json
+from database import get_db_connection
 
 def validate_invoice_date(invoice_date_str: str,entity:str) -> dict | None:
     """
@@ -351,3 +353,98 @@ def validate_pan_number(pan_no: str,entity:str) -> dict | None:
 
     # ✅ If PAN format is valid, return None (no error)
     return None
+
+async def save_manual_changes(image_url: str, extracted_data: dict) -> tuple[dict|None, dict]:
+    """
+    Checks if image URL exists and saves extracted data to error_validation.
+    
+    Args:
+        image_url (str): URL of the image
+        extracted_data (dict): Data to be saved in error_validation
+        
+    Returns:
+        tuple[dict|None, dict]: Returns (error_dict, {}) if error; (None, saved_data) if successful
+    """
+    try:
+        if not image_url or not extracted_data:
+            return {"error": "Image URL and extracted data are required"}, {}
+
+        conn = get_db_connection()
+        cursor = conn.cursor()
+
+        try:
+            # Check if image_url exists
+            check_query = """
+                SELECT id, error_validation 
+                FROM image_data 
+                WHERE image_url = %s 
+                LIMIT 1
+            """
+            cursor.execute(check_query, (image_url,))
+            result = cursor.fetchone()
+
+            if not result:
+                return {"error": f"No record found for image URL: {image_url}"}, {}
+
+            # Convert extracted_data to JSON string
+            new_data_json = json.dumps(extracted_data)
+
+            # Update error_validation, merging with existing data if any
+            update_query = """
+                UPDATE image_data 
+                SET error_validation = COALESCE(error_validation, '{}'::jsonb) || %s::jsonb
+                WHERE id = %s 
+                RETURNING error_validation
+            """
+            cursor.execute(update_query, (new_data_json, result['id']))
+            updated = cursor.fetchone()
+            
+            conn.commit()
+            
+            return None, {"error_validation": updated['error_validation']}
+
+        finally:
+            cursor.close()
+            conn.close()
+
+    except Exception as e:
+        if 'conn' in locals():
+            conn.rollback()
+        return {"error": f"Failed to save validation errors: {str(e)}"}, {}
+
+async def check_and_validate_invoice(image_url: str) -> dict:
+    """
+    Checks if error_validation exists for the given URL. If they exist, returns those changes.
+    Otherwise, proceeds with validation.
+    """
+    try:
+        if not image_url:
+            return {"error": "Image URL is required"}
+
+        conn = get_db_connection()
+        cursor = conn.cursor()
+
+        try:
+            # Check for existing error_validation
+            check_query = """
+                SELECT error_validation 
+                FROM image_data 
+                WHERE image_url = %s 
+                  AND error_validation IS NOT NULL
+                LIMIT 1
+            """
+            cursor.execute(check_query, (image_url,))
+            result = cursor.fetchone()
+
+            if result and result['error_validation']:
+                # If validation errors exist, return them without revalidating
+                return {
+                    "extracted_data": result['error_validation']
+                }
+        finally:
+            cursor.close()
+            conn.close()
+
+    except Exception as e:
+        return {"error": f"Error during validation: {str(e)}"}
+

@@ -427,13 +427,31 @@ async def validate_invoice(request: InvoiceValidationRequest):
         ship_to_details["error"]={}
         ship_to_details["recommended_fields"]=[]
         transaction_details = extracted_data.get("transaction_details", {})
+        transaction_details["error_status"]=False
+        transaction_details["error"]={}
+        transaction_details["recommended_fields"]=[]
         other_details = extracted_data.get("other_details", {})
+        other_details["error_status"]=False
+        other_details["error"]={}
+        other_details["recommended_fields"]=[]
         sales_of_product_services = extracted_data.get("sales_of_product_services", [])  # Note: Default to empty list
-        # sales_of_product_services.insert(0,{"error_status":False,"error ":[]})
-        # sales_of_product_services.insert(0,{"error_status":False,"error ":[]})
-        # sales_of_product_services.insert(1,{"recommended_fields":[]})
         gst_summary = extracted_data.get("gst_summary", [])
+    
         additional_information = extracted_data.get("additional_information", {})
+        additional_information["error_status"]=False
+        additional_information["error"]={}
+        additional_information["recommended_fields"]=[]
+
+
+        transport_details = extracted_data.get("transport_details", {})
+        transport_details["error_status"]=False
+        transport_details["error"]={}
+        transport_details["recommended_fields"]=[]
+
+        other_information = extracted_data.get("other_information", {})
+        other_information["error_status"]=False
+        other_information["error"]={}
+        other_information["recommended_fields"]=[]
 
         #Validation for supplier_details
         supplier_name = supplier_details.get("supplier_name")
